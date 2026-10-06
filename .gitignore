@@ -1,0 +1,23 @@
+# Compiled binary (built locally with: swiftc -O grammarfix.swift -o grammarfix)
+/grammarfix
+
+# Swift / Xcode build artifacts
+.build/
+*.o
+*.dSYM/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+.swiftpm/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~

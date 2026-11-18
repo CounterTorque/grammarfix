@@ -66,7 +66,7 @@ do {
     let prompt = "<text>\n\(input)\n</text>"
     let response = try await session.respond(
         to: prompt,
-        options: GenerationOptions(samplingMode: .greedy)   // deterministic: same input, same output
+        options: GenerationOptions(sampling: .greedy)   // deterministic: same input, same output
     )
 
     var output = response.content.trimmingCharacters(in: .whitespacesAndNewlines)

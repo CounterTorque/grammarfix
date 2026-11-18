@@ -60,27 +60,63 @@ case .unavailable(let reason):
 }
 
 // 3. Proofread.
-let session = LanguageModelSession(model: model, instructions: instructions)
+// The model tends to reflow prose (merging lines, collapsing blank lines), so we
+// own the layout: split the input into lines, proofread each non-blank line on
+// its own, and stitch the results back together with the original line breaks,
+// blank lines, and indentation. Fenced code blocks are passed through untouched.
 
-do {
-    let prompt = "<text>\n\(input)\n</text>"
-    let response = try await session.respond(
-        to: prompt,
-        options: GenerationOptions(sampling: .greedy)   // deterministic: same input, same output
-    )
-
-    var output = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-
-    // Clean up wrappers the model occasionally adds.
+func clean(_ raw: String, original: String) -> String {
+    var output = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if output.hasPrefix("<text>") { output = String(output.dropFirst("<text>".count)) }
     if output.hasSuffix("</text>") { output = String(output.dropLast("</text>".count)) }
     output = output.trimmingCharacters(in: .whitespacesAndNewlines)
-    if output.count > 1, output.hasPrefix("\""), output.hasSuffix("\""), !input.hasPrefix("\"") {
+    if output.count > 1, output.hasPrefix("\""), output.hasSuffix("\""), !original.hasPrefix("\"") {
         output = String(output.dropFirst().dropLast())
     }
-
-    if output.isEmpty { fail("Model returned no text", 3) }
-    print(output, terminator: "")
-} catch {
-    fail("Model error: \(error.localizedDescription)", 3)
+    return output
 }
+
+func proofread(_ line: String) async -> String {
+    // Fresh session per line so earlier lines can't influence later ones.
+    let session = LanguageModelSession(model: model, instructions: instructions)
+    do {
+        let response = try await session.respond(
+            to: "<text>\n\(line)\n</text>",
+            options: GenerationOptions(sampling: .greedy)   // deterministic: same input, same output
+        )
+        let output = clean(response.content, original: line)
+        // A single line must stay a single line; if the model returned nothing
+        // or reflowed it, keep the original rather than damage the layout.
+        if output.isEmpty || output.contains("\n") { return line }
+        return output
+    } catch {
+        FileHandle.standardError.write("Model error on a line, left unchanged: \(error.localizedDescription)\n".data(using: .utf8)!)
+        return line
+    }
+}
+
+var results: [String] = []
+var inFence = false
+for rawLine in input.components(separatedBy: "\n") {
+    let hasCR = rawLine.hasSuffix("\r")
+    let line = hasCR ? String(rawLine.dropLast()) : rawLine
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+    var result = line
+    if trimmed.hasPrefix("```") {
+        inFence.toggle()
+    } else if !inFence && !trimmed.isEmpty {
+        let indent = String(line.prefix(while: { $0 == " " || $0 == "\t" }))
+        let trailing = String(line.reversed().prefix(while: { $0 == " " || $0 == "\t" }).reversed())
+        // Peel off list/quote/heading markers so the model never sees (or drops) them.
+        let body = String(trimmed.drop(while: { $0 == " " || $0 == "\t" }))
+        let marker = body.range(of: #"^((>\s*)*([-*+•]|\d+[.)]|#{1,6})\s+(\[[ xX]\]\s+)?|(>\s*)+)"#, options: .regularExpression)
+        let prefix = marker.map { String(body[$0]) } ?? ""
+        let text = String(body.dropFirst(prefix.count))
+        let fixed = text.isEmpty ? text : await proofread(text)
+        result = indent + prefix + fixed + trailing
+    }
+    results.append(result + (hasCR ? "\r" : ""))
+}
+
+print(results.joined(separator: "\n"), terminator: "")
